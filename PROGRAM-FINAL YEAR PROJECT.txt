@@ -1,0 +1,247 @@
+PROGRAM
+
+
+#include <LiquidCrystal.h>
+#include <ESP32Servo.h>
+#include <DFRobot_DHT11.h>
+#include <Wire.h>
+#include <BH1750.h>
+#include <WiFi.h>
+#include <ThingSpeak.h>
+
+// ---------------- LCD ----------------
+LiquidCrystal lcd(4,16,17,5,18,19);
+
+// ---------------- Objects ----------------
+Servo servo4;
+DFRobot_DHT11 DHT;
+BH1750 lightMeter;
+
+// ---------------- Pins ----------------
+#define DHT11_PIN 15
+
+const int Soil_Moisture = 34;
+const int Rain_level = 35;
+const int DC_pump = 2;
+const int buzzer = 23;
+
+// Ultrasonic 1 (Water Level)
+const int trigPin = 12;
+const int echoPin = 14;
+
+// Ultrasonic 2 (Object Detection)
+const int trigPin1 = 27;
+const int echoPin1 = 26;
+
+// ---------------- WiFi & ThingSpeak ----------------
+const char* ssid = "Airtel_Cloudmation";
+const char* password = "Cloud@1447";
+
+WiFiClient client;
+
+unsigned long myChannelNumber = 3253693;
+const char * myWriteAPIKey = "QWI1KQ1NFG0GP77D";
+
+// ---------------- Variables ----------------
+int t1, h1;
+float lux;
+float phValue = 0;
+
+long duration, duration1;
+int distanceCm, distance1;
+int pos3 = 0;
+
+// ---------- Function ----------
+bool checkObject();
+
+void setup()
+{
+  Serial.begin(9600);
+
+  randomSeed(analogRead(34));
+
+  servo4.attach(13);
+
+  pinMode(DC_pump, OUTPUT);
+  pinMode(buzzer, OUTPUT);
+
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+
+  pinMode(trigPin1, OUTPUT);
+  pinMode(echoPin1, INPUT);
+
+  // I2C
+  Wire.begin(21,22);
+  lightMeter.begin();
+
+  // LCD
+  lcd.begin(16, 2);
+  lcd.setCursor(0,0);
+  lcd.print("SMART FARM");
+  lcd.setCursor(0,1);
+  lcd.print("SYSTEM START");
+  delay(2000);
+  lcd.clear();
+
+  // -------- WiFi Connect --------
+  WiFi.begin(ssid, password);
+  while(WiFi.status() != WL_CONNECTED)
+  {
+    delay(1000);
+    Serial.println("Connecting to WiFi...");
+  }
+  Serial.println("WiFi Connected");
+
+  ThingSpeak.begin(client);
+}
+
+void loop()
+{
+  // -------- Sensor Read --------
+  int Moisture_level = analogRead(Soil_Moisture);
+  int rain_level = analogRead(Rain_level);
+
+  DHT.read(DHT11_PIN);
+  t1 = DHT.temperature;
+  h1 = DHT.humidity;
+
+  lux = lightMeter.readLightLevel();
+
+  phValue = random(55, 86) / 10.0;
+
+  // -------- Water Level --------
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  duration = pulseIn(echoPin, HIGH);
+  distanceCm = duration * 0.034 / 2;
+
+  // -------- Serial Monitor --------
+  Serial.print("Temp: "); Serial.print(t1);
+  Serial.print(" Hum: "); Serial.print(h1);
+  Serial.print(" Soil: "); Serial.print(Moisture_level);
+  Serial.print(" Rain: "); Serial.print(rain_level);
+  Serial.print(" Water: "); Serial.print(distanceCm);
+  Serial.print(" Lux: "); Serial.print(lux);
+  Serial.print(" pH: "); Serial.println(phValue);
+
+  // -------- LCD PAGE 1 --------
+  lcd.setCursor(0,0);
+  lcd.print("T:"); lcd.print(t1);
+  lcd.print(" H:"); lcd.print(h1);
+
+  lcd.setCursor(0,1);
+  lcd.print("Light:"); lcd.print(lux);
+  delay(2000);
+  lcd.clear();
+
+  // -------- LCD PAGE 2 --------
+  lcd.setCursor(0,0);
+  lcd.print("Soil:"); lcd.print(Moisture_level);
+
+  lcd.setCursor(0,1);
+  lcd.print("pH:"); lcd.print(phValue);
+  delay(2000);
+  lcd.clear();
+
+  // -------- LCD PAGE 3 --------
+  lcd.setCursor(0,0);
+  lcd.print("Water:"); lcd.print(distanceCm);
+
+  lcd.setCursor(0,1);
+  lcd.print("Rain:"); lcd.print(rain_level);
+  delay(2000);
+  lcd.clear();
+
+  // -------- Pump Control --------
+  if(Moisture_level > 3500 && distanceCm < 50)
+  {
+    digitalWrite(DC_pump, HIGH);
+    lcd.setCursor(0,0);
+    lcd.print("SOIL DRY");
+    lcd.setCursor(0,1);
+    lcd.print("PUMP ON");
+  }
+  else
+  {
+    digitalWrite(DC_pump, LOW);
+    lcd.setCursor(0,0);
+    lcd.print("PUMP OFF");
+  }
+
+  delay(2000);
+  lcd.clear();
+
+  // -------- ThingSpeak Upload --------
+  ThingSpeak.setField(1, t1);
+  ThingSpeak.setField(2, h1);
+  ThingSpeak.setField(3, Moisture_level);
+  ThingSpeak.setField(4, rain_level);
+  ThingSpeak.setField(5, distanceCm);
+  ThingSpeak.setField(6, lux);
+  ThingSpeak.setField(7, phValue);
+
+  int x = ThingSpeak.writeFields(myChannelNumber, myWriteAPIKey);
+
+  if(x == 200)
+    Serial.println("Data Uploaded to ThingSpeak");
+  else
+    Serial.println("ThingSpeak Error");
+
+  delay(1500);
+
+  // -------- Servo Scan --------
+  for (pos3 = 0; pos3 <= 180; pos3++)
+  {
+    servo4.write(pos3);
+    delay(15);
+    if(checkObject()) break;
+  }
+
+  for (pos3 = 180; pos3 >= 0; pos3--)
+  {
+    servo4.write(pos3);
+    delay(15);
+    if(checkObject()) break;
+  }
+}
+
+// -------- Object Detection Function --------
+bool checkObject()
+{
+  digitalWrite(trigPin1, LOW);
+  delayMicroseconds(2);
+
+  digitalWrite(trigPin1, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin1, LOW);
+
+  duration1 = pulseIn(echoPin1, HIGH);
+  distance1 = duration1 * 0.034 / 2;
+
+  lcd.setCursor(0,0);
+  lcd.print("Dist:");
+  lcd.print(distance1);
+  lcd.print("cm   ");
+
+  if(distance1 > 0 && distance1 <= 10)
+  {
+    digitalWrite(buzzer, HIGH);
+    lcd.setCursor(0,1);
+    lcd.print("OBJECT DETECTED");
+    delay(1000);
+    digitalWrite(buzzer, LOW);
+    return true;
+  }
+  else
+  {
+    digitalWrite(buzzer, LOW);
+    lcd.setCursor(0,1);
+    lcd.print("Scanning...    ");
+    return false;
+  }
+}
